@@ -1,0 +1,68 @@
+import { CarbonCredit } from '@/types';
+
+export const mockCarbonCredits: CarbonCredit[] = [
+  {
+    creditId: 'carbon-001',
+    siteName: 'Restoration Site Khlong Phlu North',
+    measurementDate: '2024-03-15',
+    biomassEstimateTon: 142.5,
+    co2EquivalentTon: 262.2,
+    verificationStatus: 'verified',
+  },
+  {
+    creditId: 'carbon-002',
+    siteName: 'Restoration Site Khlong Phlu North',
+    measurementDate: '2023-09-20',
+    biomassEstimateTon: 128.3,
+    co2EquivalentTon: 236.1,
+    verificationStatus: 'issued',
+  },
+  {
+    creditId: 'carbon-003',
+    siteName: 'Restoration Site Nong Bua East',
+    measurementDate: '2024-02-28',
+    biomassEstimateTon: 98.7,
+    co2EquivalentTon: 181.6,
+    verificationStatus: 'reported',
+  },
+  {
+    creditId: 'carbon-004',
+    siteName: 'Restoration Site Bang Kachai South',
+    measurementDate: '2024-03-10',
+    biomassEstimateTon: 76.4,
+    co2EquivalentTon: 140.6,
+    verificationStatus: 'verified',
+  },
+  {
+    creditId: 'carbon-005',
+    siteName: 'Restoration Site Bang Kachai South',
+    measurementDate: '2023-12-05',
+    biomassEstimateTon: 68.2,
+    co2EquivalentTon: 125.5,
+    verificationStatus: 'issued',
+  },
+  {
+    creditId: 'carbon-006',
+    siteName: 'Restoration Site Khao Saming West',
+    measurementDate: '2024-01-18',
+    biomassEstimateTon: 52.8,
+    co2EquivalentTon: 97.2,
+    verificationStatus: 'measured',
+  },
+  {
+    creditId: 'carbon-007',
+    siteName: 'Restoration Site Khao Saming West',
+    measurementDate: '2023-07-22',
+    biomassEstimateTon: 45.1,
+    co2EquivalentTon: 83.0,
+    verificationStatus: 'issued',
+  },
+  {
+    creditId: 'carbon-008',
+    siteName: 'Restoration Site Nong Bua East',
+    measurementDate: '2023-11-30',
+    biomassEstimateTon: 88.5,
+    co2EquivalentTon: 162.9,
+    verificationStatus: 'issued',
+  },
+];
