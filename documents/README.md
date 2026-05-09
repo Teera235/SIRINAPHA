@@ -21,6 +21,7 @@
 
 ## Quick Links
 
+- [Deploy Troubleshooting](./deploy-troubleshooting.md) แก้ปัญหา CI หรือ Vercel deployment ล้มเหลว
 - **Getting started**: [`../README.md`](../README.md)
 - **Frontend**: [`../frontend/README.md`](../frontend/README.md)
 - **Backend**: [`../backend/README.md`](../backend/README.md)
