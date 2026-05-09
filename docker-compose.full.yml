@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# docker-compose.full.yml — full local stack
+# Run: docker compose -f docker-compose.full.yml up --build
+# ---------------------------------------------------------------------------
+services:
+  postgres:
+    image: postgis/postgis:15-3.4
+    container_name: sirinapha-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sirinapha
+      POSTGRES_PASSWORD: sirinapha_dev
+      POSTGRES_DB: baan_pla_link
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sirinapha -d baan_pla_link"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sirinapha-frontend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://localhost:54321}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-dev-anon}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-dev-service}
+      NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN:-}
+      LINE_CHANNEL_SECRET: ${LINE_CHANNEL_SECRET:-}
+    ports:
+      - "3000:3000"
+
+  backend-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sirinapha-backend-test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUPABASE_URL: http://postgres:5432
+      SUPABASE_KEY: dev-key
+      AWS_REGION: ap-southeast-1
+    # Override default CMD to run pytest instead
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["pip install pytest hypothesis && pytest --tb=short"]
+
+volumes:
+  postgres_data:

@@ -1,0 +1,357 @@
+# Implementation Plan: SIRINAPHA Baan-Pla Link Platform
+
+## Overview
+
+This plan implements the Baan-Pla Link platform in incremental steps, starting with the database schema and core data models, then building each processing module (Data Pipeline, Mangrove Monitor, FSI Engine, Yield Predictor, Restoration Planner), followed by the delivery system (LINE, SMS, Web Dashboard), and finally wiring everything together. Python is used for AWS Lambda functions (data processing, ML), and TypeScript for the Next.js frontend and API routes. Property-based tests use Hypothesis (Python) and fast-check (TypeScript).
+
+## Tasks
+
+- [x] 1. Set up project structure, database schema, and core types
+  - [x] 1.1 Initialize Next.js project with TypeScript, Tailwind CSS, and App Router; set up AWS Lambda Python project structure with shared utilities
+    - Create `next.config.js`, `tsconfig.json`, `tailwind.config.ts` for the frontend
+    - Create `lambda/` directory with `requirements.txt` (numpy, rasterio, xarray, earthaccess, ephem, hypothesis, boto3, supabase-py)
+    - Create `package.json` with fast-check, @line/bot-sdk, @supabase/supabase-js dependencies
+    - _Requirements: Technology Stack from Design_
+  - [x] 1.2 Create Supabase database schema with PostGIS extension and all tables
+    - Write SQL migration for all tables: `users`, `fishing_areas`, `user_fishing_areas`, `satellite_raw_data`, `ndvi_records`, `sst_records`, `chl_a_records`, `fsi_results`, `fsi_component_scores`, `yield_predictions`, `mangrove_alerts`, `restoration_sites`, `carbon_reports`, `catch_reports`, `delivery_logs`
+    - Enable PostGIS extension and create geospatial GIST indexes on `fsi_results.location`, `ndvi_records.location`, `sst_records.location`
+    - Create time-series indexes on `ndvi_records(area_id, observed_at DESC)` and `fsi_results(area_id, calculated_at DESC)`
+    - Enable `pgcrypto` extension for column-level encryption of PII fields (`phone_number`, `line_user_id`)
+    - _Requirements: 10.1, 10.2, 10.4, 10.6_
+  - [x] 1.3 Define shared TypeScript interfaces and Python dataclasses for all data models
+    - Create TypeScript interfaces: `FSIInput`, `FSIResult`, `FSIJson`, `FSIGeoJSON`, `NDVIResult`, `MangroveAlert`, `YieldPrediction`, `RestorationSite`, `CarbonReport`, `DeliveryMessage`, `UserProfile`
+    - Create Python dataclasses mirroring the same models for Lambda functions
+    - Define constants: `FSI_WEIGHTS`, `FSI_ZONES`, `NDVI_THRESHOLDS`
+    - _Requirements: 3.1, 3.7, 2.2, 7.1_
+
+- [x] 2. Implement Data Pipeline Lambda (Python)
+  - [x] 2.1 Implement NOAA OISST SST data fetcher with ERDDAP API
+    - Write `lambda/data_pipeline/fetchers/noaa_sst.py` to fetch daily SST data via ERDDAP endpoint
+    - Implement bounding box filtering for Mahachai and Ranong regions
+    - Parse NetCDF/JSON response and extract SST values with coordinates
+    - Store raw data in `satellite_raw_data` table with `fetched_at` timestamp
+    - _Requirements: 1.1, 1.6, 1.9_
+  - [x] 2.2 Implement NASA MODIS Chlorophyll-a data fetcher using earthaccess
+    - Write `lambda/data_pipeline/fetchers/nasa_chl_a.py` using `earthaccess` library
+    - Search and download MODIS Aqua L3 Chl-a data for target bounding boxes
+    - Parse HDF/NetCDF and extract chlorophyll-a concentration values
+    - Store raw data in `satellite_raw_data` table with timestamp
+    - _Requirements: 1.2, 1.6, 1.9_
+  - [x] 2.3 Implement Sentinel-2 NDVI data fetcher via Copernicus Data Space API
+    - Write `lambda/data_pipeline/fetchers/sentinel2_ndvi.py` using Copernicus Sentinel Hub Process API
+    - Fetch Band 4 (Red) and Band 8 (NIR) for NDVI calculation
+    - Schedule for every 5 days matching satellite orbit cycle
+    - Store raw data in `satellite_raw_data` table with `sentinel2_scene_id`
+    - _Requirements: 1.3, 1.6, 1.9_
+  - [x] 2.4 Implement GEBCO bathymetry loader and lunar phase calculator
+    - Write `lambda/data_pipeline/fetchers/gebco_bathymetry.py` to load pre-downloaded GEBCO NetCDF as static reference data
+    - Write `lambda/data_pipeline/fetchers/lunar_phase.py` using `ephem` library to calculate daily lunar phase (0.0 = new moon, 1.0 = full moon)
+    - _Requirements: 1.4, 1.5_
+  - [x] 2.5 Implement data validation and retry mechanism with admin alerting
+    - Write `lambda/data_pipeline/validator.py` with schema validation for each data source (SST range, Chl-a range, NDVI band values)
+    - Write `lambda/data_pipeline/retry.py` implementing retry logic: max 3 attempts, 5-minute delay between attempts
+    - Implement admin notification (SNS or email) after 3 failed retries
+    - Reject and log invalid data without storing in database
+    - _Requirements: 1.7, 1.8, 1.9_
+  - [ ]* 2.6 Write property tests for Data Pipeline validation and retry logic (Hypothesis)
+    - **Property 16: Pipeline Retry Logic** — Verify retry count ≤ 3, delay = 5 min between attempts, admin alert after 3 failures
+    - **Validates: Requirements 1.7, 1.8**
+  - [ ]* 2.7 Write property tests for satellite data validation (Hypothesis)
+    - **Property 17: Satellite Data Validation** — Verify valid data accepted, invalid data rejected, no invalid data stored
+    - **Validates: Requirements 1.9**
+  - [ ]* 2.8 Write unit tests for each data fetcher
+    - Test NOAA SST fetcher with mock ERDDAP responses
+    - Test NASA Chl-a fetcher with mock earthaccess responses
+    - Test Sentinel-2 fetcher with mock Copernicus API responses
+    - Test GEBCO loader with sample NetCDF file
+    - Test lunar phase calculator against known dates
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
+
+- [x] 3. Implement Mangrove Monitor Lambda (Python)
+  - [x] 3.1 Implement NDVI calculation and health classification
+    - Write `lambda/mangrove_monitor/ndvi_calculator.py` with NDVI formula: `(NIR - Red) / (NIR + Red)`
+    - Handle division-by-zero case when NIR + Red = 0
+    - Implement health classification: healthy (>0.6), moderate (0.4-0.6), degraded (0.2-0.4), critical (<0.2)
+    - Store results in `ndvi_records` table as time-series data
+    - _Requirements: 2.1, 2.2, 2.3_
+  - [x] 3.2 Implement change detection and alert generation
+    - Write `lambda/mangrove_monitor/change_detector.py` comparing current NDVI with 6-month rolling average
+    - Generate "warning" alert when NDVI drops >20% from 6-month average
+    - Generate "critical" alert when NDVI drops >40% from 6-month average
+    - Store alerts in `mangrove_alerts` table with geometry data
+    - _Requirements: 2.4, 2.5, 2.6_
+  - [x] 3.3 Implement Blue Carbon MRV calculations
+    - Write `lambda/mangrove_monitor/carbon_calculator.py` to compute CO2 sequestration (tCO2) from NDVI and mangrove area
+    - Implement revenue sharing calculation: private 63%, cooperative 20%, government 10%, MRV fee 7%
+    - Generate monthly and annual Blue Carbon reports stored in `carbon_reports` table
+    - _Requirements: 8.1, 8.2, 8.3, 8.5_
+  - [ ]* 3.4 Write property tests for NDVI calculation and classification (Hypothesis)
+    - **Property 6: NDVI Calculation Range** — For all valid Band 4 and Band 8 values (≥0), NDVI ∈ [-1, 1]
+    - **Validates: Requirements 2.1**
+  - [ ]* 3.5 Write property tests for NDVI health classification (Hypothesis)
+    - **Property 7: NDVI Health Classification** — For all NDVI ∈ [-1, 1], classification matches thresholds exactly
+    - **Validates: Requirements 2.2**
+  - [ ]* 3.6 Write property tests for alert level classification (Hypothesis)
+    - **Property 8: Mangrove Alert Level Classification** — For all (current_ndvi, avg_6month) pairs, alert level matches: >40% drop → critical, >20% drop → warning, ≤20% → no alert
+    - **Validates: Requirements 2.4, 2.5**
+  - [ ]* 3.7 Write property tests for carbon calculation (Hypothesis)
+    - **Property 9: Carbon Calculation** — CO2 ≥ 0 for all valid inputs; monotonically increasing with area when NDVI is constant
+    - **Validates: Requirements 5.6, 8.1**
+  - [ ]* 3.8 Write property tests for revenue sharing (Hypothesis)
+    - **Property 10: Revenue Sharing Sum** — For all positive revenue amounts, shares sum to 100% (within floating point tolerance)
+    - **Validates: Requirements 8.5**
+
+- [x] 4. Checkpoint — Verify data layer and monitoring
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 5. Implement FSI Engine Lambda (Python)
+  - [x] 5.1 Implement all score functions (sst_score, chl_a_score, depth_score, lunar_score, season_score)
+    - Write `lambda/fsi_engine/score_functions.py` with all 5 scoring functions as defined in the design
+    - `sst_score`: 27-30°C → 1.0, linear decay outside range (±10°C to 0)
+    - `chl_a_score`: 0.5-5.0 mg/m³ → 1.0, linear decay outside range
+    - `depth_score`: 5-50m → 1.0, linear decay outside range
+    - `lunar_score`: phase 0.0 → 1.0, phase 1.0 → 0.3 (linear)
+    - `season_score`: based on seasonal and meteorological data
+    - _Requirements: 3.2, 3.3, 3.4, 3.5, 3.6_
+  - [x] 5.2 Implement FSI weighted sum calculation with graceful degradation
+    - Write `lambda/fsi_engine/fsi_calculator.py` with formula: FSI = 0.25(SST) + 0.25(Chl-a) + 0.15(Depth) + 0.10(Lunar) + 0.25(NDVI) + 0.10(Season)
+    - Clamp final FSI to [0.0, 1.0]
+    - Handle missing data sources: calculate from available data, set `is_complete: false`, list missing sources in `data_completeness`
+    - _Requirements: 3.1, 3.9, 3.10_
+  - [x] 5.3 Implement FSI zone classification and FSI Map generation
+    - Write zone classifier: FSI > 0.7 → green, 0.4-0.7 → yellow, < 0.4 → red
+    - Store FSI results with component scores in `fsi_results` and `fsi_component_scores` tables
+    - Implement daily FSI update triggered by EventBridge when SST/Chl-a data updates
+    - _Requirements: 3.7, 3.8_
+  - [ ]* 5.4 Write property tests for score functions (Hypothesis)
+    - **Property 2: Score Functions Range** — For all possible input values, every score function returns a value in [0.0, 1.0]
+    - **Validates: Requirements 3.2, 3.3, 3.4, 3.5, 3.6, 1.5**
+  - [ ]* 5.5 Write property tests for FSI formula (Hypothesis)
+    - **Property 1: FSI Weighted Sum Formula** — For all valid inputs, FSI equals the weighted sum within floating point tolerance
+    - **Validates: Requirements 3.1**
+  - [ ]* 5.6 Write property tests for FSI range invariant (Hypothesis)
+    - **Property 3: FSI Range Invariant** — For all possible inputs (including extreme values), FSI ∈ [0.0, 1.0]
+    - **Validates: Requirements 3.10**
+  - [ ]* 5.7 Write property tests for FSI zone classification (Hypothesis)
+    - **Property 4: FSI Zone Classification** — For all FSI ∈ [0.0, 1.0], zone matches thresholds exactly
+    - **Validates: Requirements 3.7**
+  - [ ]* 5.8 Write property tests for FSI graceful degradation (Hypothesis)
+    - **Property 5: FSI Graceful Degradation** — For all subsets of available data sources, FSI is calculable and data_completeness correctly reports missing sources
+    - **Validates: Requirements 3.9**
+
+- [x] 6. Implement FSI data serialization and parsing (Python + TypeScript)
+  - [x] 6.1 Implement FSI to JSON and JSON to FSI conversion
+    - Write `lambda/fsi_engine/serializers.py` with `fsi_to_json()` and `json_to_fsi()` functions
+    - Preserve all fields: fsi_value, zone, location, component_scores, calculated_at, data_completeness
+    - _Requirements: 11.1, 11.4_
+  - [x] 6.2 Implement FSI to GeoJSON and GeoJSON to FSI conversion
+    - Write GeoJSON serializer following the `FSIGeoJSON` interface from design
+    - Map location to `geometry.coordinates` [lng, lat] and FSI data to `properties`
+    - _Requirements: 11.2, 11.5_
+  - [x] 6.3 Implement FSI Thai text formatter for LINE/SMS
+    - Write formatter producing Thai summary text: "📊 FSI {area}: {value} ({zone_thai} {emoji})\nSST: {sst}°C | Chl-a: {chl_a} mg/m³"
+    - Include FSI value, Thai zone name, and key component scores
+    - _Requirements: 11.3_
+  - [x] 6.4 Implement invalid JSON error handling with position and cause reporting
+    - Write JSON parser that catches malformed input and returns error with position and cause description
+    - Never throw unhandled exceptions
+    - _Requirements: 11.6_
+  - [ ]* 6.5 Write property tests for FSI JSON round-trip (Hypothesis)
+    - **Property 12: FSI JSON Round-Trip** — For all valid FSI objects, `json_to_fsi(fsi_to_json(fsi))` equals original
+    - **Validates: Requirements 11.4**
+  - [ ]* 6.6 Write property tests for FSI GeoJSON round-trip (Hypothesis)
+    - **Property 13: FSI GeoJSON Round-Trip** — For all valid FSI objects, `geojson_to_fsi(fsi_to_geojson(fsi))` equals original
+    - **Validates: Requirements 11.5**
+  - [ ]* 6.7 Write property tests for Thai text formatting (Hypothesis)
+    - **Property 14: Thai Text Formatting** — For all valid FSI results, Thai text contains FSI value, Thai zone name, and key component scores
+    - **Validates: Requirements 11.3**
+  - [ ]* 6.8 Write property tests for invalid JSON error handling (Hypothesis)
+    - **Property 15: Invalid JSON Error Handling** — For all malformed JSON strings, error response includes position and cause; no unhandled exceptions
+    - **Validates: Requirements 11.6**
+
+- [x] 7. Checkpoint — Verify FSI engine and serialization
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 8. Implement Yield Predictor (Python + SageMaker)
+  - [x] 8.1 Implement yield prediction feature preprocessing and SageMaker inference
+    - Write `lambda/yield_predictor/predictor.py` accepting NDVI, SST, Chl-a history (30 days) and season data
+    - Implement feature preprocessing: normalize inputs, handle missing values with historical averages
+    - Call SageMaker endpoint for inference, parse species-level predictions
+    - Store predictions in `yield_predictions` table with confidence intervals
+    - _Requirements: 4.1, 4.2, 4.4_
+  - [x] 8.2 Implement 7-day and 30-day revenue forecasting
+    - Write revenue forecast logic combining species predictions with market price data
+    - Generate `forecast_7day` and `forecast_30day` with confidence intervals
+    - Ensure `confidence_lower ≤ confidence_upper` invariant
+    - _Requirements: 4.3, 4.4_
+  - [x] 8.3 Implement catch report ingestion for model retraining feedback loop
+    - Write `lambda/yield_predictor/catch_ingestion.py` to receive actual catch data from fishermen
+    - Store in `catch_reports` table linked to user and area
+    - Prepare data for periodic model retraining
+    - _Requirements: 4.5_
+  - [ ]* 8.4 Write property tests for confidence interval invariant (Hypothesis)
+    - **Property 20: Prediction Confidence Interval** — For all predictions, confidence_lower ≤ confidence_upper
+    - **Validates: Requirements 4.4**
+  - [ ]* 8.5 Write unit tests for yield predictor
+    - Test feature preprocessing with known inputs
+    - Test SageMaker inference with mock endpoint
+    - Test cached prediction fallback when endpoint is unavailable
+    - _Requirements: 4.1, 4.2, 4.3_
+
+- [x] 9. Implement Restoration Planner Lambda (Python)
+  - [x] 9.1 Implement restoration site analysis and ranking
+    - Write `lambda/restoration_planner/site_analyzer.py` analyzing suitability based on NDVI history, soil condition, and tidal range
+    - Rank sites by carbon sequestration potential (descending order)
+    - Calculate expected survival rate for each site (target: 45% → 85%)
+    - Calculate area in rai (Thai unit) and CO2 potential (tCO2/year)
+    - Store results in `restoration_sites` table
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.6_
+  - [x] 9.2 Implement seedling tracking via NDVI monitoring
+    - Write `lambda/restoration_planner/seedling_tracker.py` to track survival rate and growth using NDVI changes over time
+    - Compare actual NDVI growth against expected growth curves
+    - _Requirements: 5.5_
+  - [ ]* 9.3 Write property tests for restoration site ranking (Hypothesis)
+    - **Property 11: Restoration Site Ranking** — For all sets of sites with different carbon potentials, ranking is in descending order of carbon_potential
+    - **Validates: Requirements 5.2**
+  - [ ]* 9.4 Write unit tests for restoration planner
+    - Test site analysis with mock NDVI history and soil data
+    - Test survival rate estimation logic
+    - Test CO2 calculation for known area/NDVI combinations
+    - _Requirements: 5.1, 5.3, 5.4, 5.6_
+
+- [x] 10. Checkpoint — Verify all backend processing modules
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 11. Implement User Management and Authentication
+  - [x] 11.1 Set up Supabase Auth and implement user registration for all 3 user types
+    - Configure Supabase Auth with email/phone providers
+    - Write `src/lib/supabase.ts` client configuration
+    - Implement registration API routes for Fisherman (via LINE), Community_Rep (via web), Corporate_Partner (via web)
+    - Store user profiles with `user_type`, `preferred_channel`, `fishing_area_ids`, `responsible_area_ids`, `membership_tier`
+    - _Requirements: 7.1, 7.2, 7.3_
+  - [x] 11.2 Implement role-based data access filtering
+    - Write middleware/RLS policies: Community_Rep sees only their `responsible_area_ids` data
+    - Corporate_Partner sees ESG/Blue Carbon data filtered by `membership_tier` (Silver or Gold)
+    - Fisherman sees FSI data for their registered `fishing_area_ids`
+    - _Requirements: 7.4, 7.5_
+  - [ ]* 11.3 Write property tests for user data access filtering (fast-check)
+    - **Property 19: User Data Access Filtering** — For all Community_Rep users, returned data is limited to their responsible areas; for all Corporate_Partner users, data matches their membership tier
+    - **Validates: Requirements 7.4, 7.5**
+  - [ ]* 11.4 Write unit tests for user registration and authentication
+    - Test registration flow for each user type
+    - Test RLS policies with different user roles
+    - _Requirements: 7.1, 7.2, 7.3_
+
+- [x] 12. Implement Delivery System — LINE and SMS
+  - [x] 12.1 Implement LINE Messaging API integration for daily FSI delivery
+    - Write `src/app/api/line/webhook/route.ts` for LINE webhook handler
+    - Write `src/lib/line-client.ts` using @line/bot-sdk for push messages
+    - Implement daily FSI summary push to registered fishermen in Thai language
+    - _Requirements: 6.2, 6.5_
+  - [x] 12.2 Implement LINE webhook handler for catch report ingestion
+    - Parse incoming text messages from fishermen reporting catch data
+    - Forward parsed catch data to Yield Predictor's catch ingestion endpoint
+    - Reply with confirmation message in Thai
+    - _Requirements: 6.7_
+  - [x] 12.3 Implement SMS fallback delivery via Twilio/ThaiBulkSMS
+    - Write `src/lib/sms-client.ts` for SMS sending
+    - Implement automatic fallback: when LINE delivery fails, send via SMS
+    - Log delivery status as "fallback_sms" in `delivery_logs` table
+    - _Requirements: 6.3, 6.8_
+  - [x] 12.4 Implement mangrove alert delivery within 30-minute SLA
+    - Write alert delivery pipeline: when `mangrove_alerts` are created, push to Community_Rep via LINE and Web Dashboard
+    - Ensure delivery within 30 minutes of alert detection
+    - _Requirements: 6.4_
+  - [ ]* 12.5 Write property tests for SMS fallback (fast-check)
+    - **Property 18: SMS Fallback** — For all LINE delivery failures, SMS is sent automatically; SMS content contains equivalent key information
+    - **Validates: Requirements 6.8**
+  - [ ]* 12.6 Write unit tests for delivery system
+    - Test LINE webhook parsing with sample event payloads
+    - Test message formatting for daily_fsi, alert, and report types
+    - Test fallback logic with mock LINE/SMS clients
+    - _Requirements: 6.2, 6.3, 6.4, 6.7, 6.8_
+
+- [x] 13. Checkpoint — Verify user management and delivery system
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 14. Implement Web Dashboard (Next.js + TypeScript)
+  - [x] 14.1 Implement interactive FSI map with zoom and area detail views
+    - Write `src/app/dashboard/page.tsx` as the main dashboard page
+    - Integrate map library (e.g., Mapbox GL or Leaflet) for interactive FSI map display
+    - Implement zoom in/out and click-to-view area details with FSI zone colors (green/yellow/red)
+    - Display in Thai language with fisherman-friendly terminology
+    - _Requirements: 9.1, 6.5, 6.6_
+  - [x] 14.2 Implement NDVI trend charts and current ocean conditions display
+    - Write `src/app/dashboard/components/NDVIChart.tsx` for time-series NDVI trend visualization
+    - Write `src/app/dashboard/components/OceanConditions.tsx` showing current SST, Chl-a, and lunar phase
+    - _Requirements: 9.2, 9.3_
+  - [x] 14.3 Implement yield prediction summary and alert status panels
+    - Write `src/app/dashboard/components/YieldSummary.tsx` showing species predictions with confidence intervals
+    - Write `src/app/dashboard/components/AlertPanel.tsx` showing all mangrove alerts with severity levels
+    - _Requirements: 9.4, 9.5_
+  - [x] 14.4 Implement Blue Carbon report view for Corporate Partners
+    - Write `src/app/dashboard/carbon/page.tsx` showing Blue Carbon MRV reports
+    - Filter data by Corporate_Partner membership tier (Silver/Gold)
+    - Display area, average NDVI, CO2 tons, and revenue sharing breakdown
+    - _Requirements: 8.4, 7.5_
+  - [x] 14.5 Implement PDF export for reports
+    - Write `src/app/api/reports/pdf/route.ts` for server-side PDF generation
+    - Support export of FSI reports, NDVI trends, Blue Carbon reports, and yield predictions
+    - _Requirements: 9.6_
+  - [x] 14.6 Optimize dashboard for mobile responsiveness and 4G performance
+    - Ensure responsive design with Tailwind CSS breakpoints for mobile devices
+    - Optimize bundle size, implement lazy loading for map and chart components
+    - Target < 5 second load time on 4G connection
+    - _Requirements: 6.6, 9.7_
+  - [ ]* 14.7 Write unit tests for dashboard components
+    - Test FSI map rendering with mock data
+    - Test NDVI chart with sample time-series data
+    - Test alert panel with various alert levels
+    - Test PDF export API route
+    - _Requirements: 9.1, 9.2, 9.4, 9.5, 9.6_
+
+- [x] 15. Implement data retention and cold storage migration
+  - [x] 15.1 Implement automated daily backup and cold storage migration Lambda
+    - Write `lambda/data_management/backup.py` for daily automated backup
+    - Write `lambda/data_management/archiver.py` to move data older than 5 years to AWS S3 Glacier
+    - Move raw satellite data older than 1 year to cold storage
+    - Schedule via EventBridge
+    - _Requirements: 10.3, 10.5_
+  - [ ]* 15.2 Write unit tests for data retention logic
+    - Test age-based data classification (hot vs cold storage)
+    - Test backup creation and verification
+    - _Requirements: 10.3, 10.5_
+
+- [x] 16. Wire all components together with EventBridge scheduling
+  - [x] 16.1 Configure EventBridge schedules for all Lambda functions
+    - Daily 06:00 ICT: Data Pipeline (SST + Chl-a fetch)
+    - Every 5 days: Sentinel-2 NDVI fetch
+    - Daily after data pipeline: FSI Engine calculation
+    - Daily after data pipeline: Mangrove Monitor analysis
+    - Daily: Yield Predictor inference
+    - Daily after FSI calculation: Delivery System push
+    - _Requirements: 1.1, 1.2, 1.3, 3.8_
+  - [x] 16.2 Wire Data Pipeline → FSI Engine → Delivery System end-to-end flow
+    - Ensure FSI Engine triggers after Data Pipeline completes
+    - Ensure Delivery System sends daily FSI summaries after FSI calculation
+    - Wire LINE webhook → catch report → Yield Predictor feedback loop
+    - Wire Mangrove Monitor alerts → Delivery System alert notifications
+    - _Requirements: 3.8, 6.2, 6.4, 6.7_
+  - [ ]* 16.3 Write integration tests for end-to-end flows
+    - Test Data Pipeline → Database → FSI Engine → Delivery flow
+    - Test LINE webhook → catch report → Yield Predictor flow
+    - Test Mangrove alert → Delivery notification flow
+    - _Requirements: 1.1, 3.8, 6.2, 6.4, 6.7_
+
+- [x] 17. Final checkpoint — Ensure all tests pass
+  - Ensure all tests pass, ask the user if questions arise.
+
+## Notes
+
+- Tasks marked with `*` are optional and can be skipped for faster MVP
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation at key milestones
+- Python (Hypothesis) is used for property-based tests on Lambda functions; TypeScript (fast-check) for Next.js components
+- Property tests validate the 20 correctness properties defined in the design document
+- Unit tests validate specific examples, edge cases, and error conditions
+- All user-facing text must be in Thai (ภาษาไทย) with fisherman-friendly language
