@@ -60,6 +60,9 @@ Thumbs.db
 .aws-sam/
 cdk.out/
 
+# ---- Reference projects (not part of this repo) ----
+RIFFAI Agriculture/
+
 # ---- Secrets ----
 *.pem
 gee-key.json
