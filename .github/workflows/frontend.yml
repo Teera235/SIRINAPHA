@@ -1,15 +1,18 @@
 name: Frontend CI
 
+# Note: push/PR triggers are disabled until GitHub billing issue is resolved.
+# Run manually from the Actions tab, or re-enable the triggers below.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/frontend.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "frontend/**"
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "frontend/**"
+  #     - ".github/workflows/frontend.yml"
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - "frontend/**"
 
 jobs:
   test:

@@ -1,15 +1,18 @@
 name: Backend CI
 
+# Note: push/PR triggers are disabled until GitHub billing issue is resolved.
+# Run manually from the Actions tab, or re-enable the triggers below.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "backend/**"
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "backend/**"
+  #     - ".github/workflows/backend.yml"
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - "backend/**"
 
 jobs:
   test:
