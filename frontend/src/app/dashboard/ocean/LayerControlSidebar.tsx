@@ -15,6 +15,7 @@
 import { useState } from "react";
 import { Menu, Search, X } from "lucide-react";
 import { oceanColors, gradients } from "./theme";
+import OverviewPanel from "./OverviewPanel";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -223,6 +224,7 @@ export default function LayerControlSidebar(props: LayerControlSidebarProps) {
       </div>
 
       {/* Footer */}
+      <OverviewPanel visible={true} />
       <footer
         style={{
           padding: "12px 20px",
